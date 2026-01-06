@@ -112,6 +112,222 @@ try:
 except ImportError:
     PDF2IMAGE_AVAILABLE = False
 
+# DeepSeek-OCR (고성능 VLM 기반 OCR - GPU 권장)
+DEEPSEEK_AVAILABLE = False
+_deepseek_model = None
+_deepseek_processor = None
+
+def _check_deepseek():
+    """DeepSeek-OCR 사용 가능 여부를 lazy하게 확인"""
+    global DEEPSEEK_AVAILABLE
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoProcessor
+        DEEPSEEK_AVAILABLE = True
+    except ImportError as e:
+        logger.debug(f"DeepSeek-OCR 사용 불가: {e}")
+        DEEPSEEK_AVAILABLE = False
+    return DEEPSEEK_AVAILABLE
+
+
+# ============================================================================
+# DeepSeek-OCR 처리 클래스
+# ============================================================================
+
+class DeepSeekOCRProcessor:
+    """
+    DeepSeek-OCR 기반 텍스트 추출 (VLM 기반 고성능 OCR)
+
+    특징:
+    - 100+ 언어 지원, 한글 우수
+    - 10-20x 토큰 압축으로 효율적
+    - 복잡한 레이아웃, 테이블 처리 우수
+    - 8GB VRAM (RTX 4060 Ti)에서 tiny/small 모드 구동 가능
+
+    설치: pip install .[deepseek]
+    """
+
+    # 모델 크기별 해상도 매핑
+    MODEL_SIZES = {
+        "tiny": {"resolution": 512, "tokens": 64},
+        "small": {"resolution": 640, "tokens": 100},
+        "base": {"resolution": 1024, "tokens": 256},
+        "large": {"resolution": 1280, "tokens": 400},
+    }
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        """
+        Args:
+            config: DeepSeek-OCR 설정
+                - model_id: HuggingFace 모델 ID (기본: deepseek-ai/DeepSeek-OCR)
+                - model_size: tiny, small, base, large
+                - quantize: none, 8bit, 4bit
+                - device: cuda, cpu
+                - use_vllm: vLLM 백엔드 사용 여부
+        """
+        config = config or {}
+        self.model_id = config.get("model_id", "deepseek-ai/DeepSeek-OCR")
+        self.model_size = config.get("model_size", "tiny")
+        self.quantize = config.get("quantize", "4bit")
+        self.device = config.get("device", "cuda")
+        self.use_vllm = config.get("use_vllm", True)
+        self.max_batch_size = config.get("max_batch_size", 4)
+
+        self._model = None
+        self._processor = None
+        self._vllm_engine = None
+
+    def _init_model(self):
+        """모델 초기화 (Lazy Loading)"""
+        if self._model is not None:
+            return True
+
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoProcessor
+
+            logger.info(f"DeepSeek-OCR 모델 로딩 중... (크기: {self.model_size}, 양자화: {self.quantize})")
+
+            # 양자화 설정
+            load_kwargs = {
+                "trust_remote_code": True,
+                "device_map": "auto" if self.device == "cuda" else None,
+            }
+
+            if self.quantize == "4bit":
+                from transformers import BitsAndBytesConfig
+                load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_quant_type="nf4",
+                )
+            elif self.quantize == "8bit":
+                from transformers import BitsAndBytesConfig
+                load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                )
+            else:
+                load_kwargs["torch_dtype"] = torch.float16
+
+            self._processor = AutoProcessor.from_pretrained(
+                self.model_id,
+                trust_remote_code=True
+            )
+            self._model = AutoModelForCausalLM.from_pretrained(
+                self.model_id,
+                **load_kwargs
+            )
+
+            logger.info(f"DeepSeek-OCR 모델 로딩 완료")
+            return True
+
+        except Exception as e:
+            logger.error(f"DeepSeek-OCR 모델 로딩 실패: {e}")
+            self._model = None
+            self._processor = None
+            return False
+
+    def _get_resolution(self) -> int:
+        """모델 크기에 따른 해상도 반환"""
+        return self.MODEL_SIZES.get(self.model_size, self.MODEL_SIZES["tiny"])["resolution"]
+
+    def _preprocess_image(self, image: "Image.Image") -> "Image.Image":
+        """이미지 전처리 (해상도 조정)"""
+        if not PIL_AVAILABLE:
+            return image
+
+        target_res = self._get_resolution()
+
+        # RGB 변환
+        if image.mode not in ('RGB',):
+            image = image.convert('RGB')
+
+        # 해상도 조정
+        width, height = image.size
+        max_dim = max(width, height)
+
+        if max_dim > target_res:
+            scale = target_res / max_dim
+            new_size = (int(width * scale), int(height * scale))
+            image = image.resize(new_size, Image.Resampling.LANCZOS)
+
+        return image
+
+    def extract_text(self, image_path: str) -> str:
+        """이미지에서 텍스트 추출"""
+        if not PIL_AVAILABLE:
+            logger.error("PIL이 설치되지 않았습니다.")
+            return ""
+
+        if not self._init_model():
+            logger.error("DeepSeek-OCR 모델 초기화 실패")
+            return ""
+
+        try:
+            image = Image.open(image_path)
+            return self.extract_text_from_pil_image(image)
+        except Exception as e:
+            logger.error(f"이미지 로드 실패: {image_path}, 오류: {e}")
+            return ""
+
+    def extract_text_from_pil_image(self, image: "Image.Image") -> str:
+        """PIL Image 객체에서 텍스트 추출"""
+        if not self._init_model():
+            return ""
+
+        try:
+            import torch
+
+            # 이미지 전처리
+            image = self._preprocess_image(image)
+
+            # 프롬프트 설정 (마크다운 형식 텍스트 추출)
+            prompt = "Extract all text from this image in markdown format. Preserve the layout and structure."
+
+            # 입력 준비
+            inputs = self._processor(
+                text=prompt,
+                images=image,
+                return_tensors="pt"
+            )
+
+            if self.device == "cuda" and torch.cuda.is_available():
+                inputs = {k: v.cuda() for k, v in inputs.items()}
+
+            # 추론
+            with torch.no_grad():
+                outputs = self._model.generate(
+                    **inputs,
+                    max_new_tokens=2048,
+                    do_sample=False,
+                    pad_token_id=self._processor.tokenizer.eos_token_id,
+                )
+
+            # 디코딩
+            generated_text = self._processor.batch_decode(
+                outputs[:, inputs["input_ids"].shape[1]:],
+                skip_special_tokens=True
+            )[0]
+
+            return generated_text.strip()
+
+        except Exception as e:
+            logger.error(f"DeepSeek-OCR 추출 실패: {e}")
+            return ""
+
+    def get_info(self) -> Dict[str, Any]:
+        """현재 설정 정보 반환"""
+        return {
+            "backend": "deepseek",
+            "model_id": self.model_id,
+            "model_size": self.model_size,
+            "quantize": self.quantize,
+            "device": self.device,
+            "resolution": self._get_resolution(),
+            "available": DEEPSEEK_AVAILABLE,
+        }
+
 
 # ============================================================================
 # OCR 및 이미지 처리 클래스
@@ -119,16 +335,17 @@ except ImportError:
 
 class OCRProcessor:
     """
-    OCR 처리 클래스 (EasyOCR/PaddleOCR 기반 - 고성능/경량)
-    
+    OCR 처리 클래스 (다중 백엔드 지원)
+
     이미지에서 텍스트를 추출하며, 엣지 환경을 고려한 경량화 옵션 제공.
-    
-    백엔드 우선순위:
-    1. EasyOCR (권장) - 빠르고 정확, 한글 지원 우수, Python 3.14 호환
-    2. PaddleOCR (대안) - 최고 성능, Python 3.12 이하 권장
-    3. Tesseract (폴백) - 위 라이브러리 미설치 시
+
+    백엔드 우선순위 (auto 모드):
+    1. DeepSeek-OCR (GPU) - VLM 기반 고성능, 복잡한 레이아웃/테이블 우수
+    2. EasyOCR (권장) - 빠르고 정확, 한글 지원 우수, Python 3.14 호환
+    3. PaddleOCR (대안) - 최고 성능, Python 3.12 이하 권장
+    4. Tesseract (폴백) - 위 라이브러리 미설치 시
     """
-    
+
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
         Args:
@@ -138,19 +355,26 @@ class OCRProcessor:
         self.lang = config.get("lang", "korean")
         self.dpi = config.get("dpi", 200)
         self.preprocessing = config.get("preprocessing", True)
-        self.backend = config.get("backend", "auto")  # auto, easyocr, paddleocr, tesseract
+        self.backend = config.get("backend", "auto")  # auto, deepseek, easyocr, paddleocr, tesseract
         self.use_gpu = config.get("use_gpu", False)  # 엣지 환경 기본 CPU
-        
+
+        # DeepSeek-OCR 설정
+        self.deepseek_config = config.get("deepseek", {})
+        self.deepseek_enabled = self.deepseek_config.get("enabled", False)
+
         # OCR 엔진 초기화
         self._easyocr_reader = None
         self._paddle_ocr = None
+        self._deepseek_ocr = None
         self._init_ocr_engine()
-    
+
     def _init_ocr_engine(self):
         """OCR 엔진 초기화"""
         if self.backend == "auto":
-            # 우선순위: EasyOCR > PaddleOCR > Tesseract
-            if EASYOCR_AVAILABLE:
+            # 우선순위: DeepSeek (GPU+enabled) > EasyOCR > PaddleOCR > Tesseract
+            if self.deepseek_enabled and self.use_gpu and _check_deepseek():
+                self.backend = "deepseek"
+            elif EASYOCR_AVAILABLE:
                 self.backend = "easyocr"
             elif _check_paddleocr():
                 self.backend = "paddleocr"
@@ -159,11 +383,32 @@ class OCRProcessor:
             else:
                 logger.warning("OCR 엔진이 설치되지 않았습니다. EasyOCR 설치 권장: pip install easyocr")
                 self.backend = None
-        
-        if self.backend == "easyocr" and EASYOCR_AVAILABLE:
+
+        if self.backend == "deepseek" and _check_deepseek():
+            self._init_deepseek()
+        elif self.backend == "easyocr" and EASYOCR_AVAILABLE:
             self._init_easyocr()
         elif self.backend == "paddleocr" and _check_paddleocr():
             self._init_paddle_ocr()
+
+    def _init_deepseek(self):
+        """DeepSeek-OCR 초기화 (지연 로딩)"""
+        if self._deepseek_ocr is None and _check_deepseek():
+            try:
+                self._deepseek_ocr = DeepSeekOCRProcessor(self.deepseek_config)
+                logger.info(f"DeepSeek-OCR 초기화 완료 (모델: {self.deepseek_config.get('model_size', 'tiny')})")
+            except Exception as e:
+                logger.error(f"DeepSeek-OCR 초기화 실패: {e}")
+                self._deepseek_ocr = None
+                # 폴백
+                if EASYOCR_AVAILABLE:
+                    self.backend = "easyocr"
+                    self._init_easyocr()
+                elif _check_paddleocr():
+                    self.backend = "paddleocr"
+                    self._init_paddle_ocr()
+                elif PYTESSERACT_AVAILABLE:
+                    self.backend = "tesseract"
     
     def _init_easyocr(self):
         """EasyOCR 초기화 (지연 로딩)"""
@@ -286,21 +531,52 @@ class OCRProcessor:
         """PIL Image 객체에서 텍스트 추출"""
         if self.preprocessing:
             image = self._preprocess_image(image)
-        
+
+        # DeepSeek-OCR 사용 (VLM 기반 고성능)
+        if self.backend == "deepseek" and self._deepseek_ocr is not None:
+            return self._extract_with_deepseek(image)
+
         # EasyOCR 사용 (권장)
         if self.backend == "easyocr" and EASYOCR_AVAILABLE:
             return self._extract_with_easyocr(image)
-        
+
         # PaddleOCR 사용 (대안)
         if self.backend == "paddleocr" and _check_paddleocr():
             return self._extract_with_paddle(image)
-        
+
         # Tesseract 폴백
         if self.backend == "tesseract" and PYTESSERACT_AVAILABLE:
             return self._extract_with_tesseract(image)
-        
+
         logger.warning("사용 가능한 OCR 엔진이 없습니다.")
         return ""
+
+    def _extract_with_deepseek(self, image: "Image.Image") -> str:
+        """DeepSeek-OCR로 텍스트 추출"""
+        if self._deepseek_ocr is None:
+            self._init_deepseek()
+
+        if self._deepseek_ocr is None:
+            # 폴백
+            if EASYOCR_AVAILABLE:
+                return self._extract_with_easyocr(image)
+            elif _check_paddleocr():
+                return self._extract_with_paddle(image)
+            return ""
+
+        try:
+            result = self._deepseek_ocr.extract_text_from_pil_image(image)
+            return result
+        except Exception as e:
+            logger.error(f"DeepSeek-OCR 추출 실패: {e}")
+            # 폴백 시도
+            if EASYOCR_AVAILABLE:
+                logger.info("EasyOCR로 폴백 시도")
+                return self._extract_with_easyocr(image)
+            elif _check_paddleocr():
+                logger.info("PaddleOCR로 폴백 시도")
+                return self._extract_with_paddle(image)
+            return ""
     
     def _extract_with_easyocr(self, image: "Image.Image") -> str:
         """EasyOCR로 텍스트 추출"""
@@ -405,14 +681,20 @@ class OCRProcessor:
     
     def get_backend_info(self) -> Dict[str, Any]:
         """현재 OCR 백엔드 정보 반환"""
-        return {
+        info = {
             "backend": self.backend,
             "lang": self.lang,
             "use_gpu": self.use_gpu,
+            "deepseek_available": _check_deepseek(),
+            "deepseek_enabled": self.deepseek_enabled,
             "easyocr_available": EASYOCR_AVAILABLE,
             "paddleocr_available": _check_paddleocr(),
             "tesseract_available": PYTESSERACT_AVAILABLE,
         }
+        # DeepSeek 상세 정보 추가
+        if self._deepseek_ocr is not None:
+            info["deepseek_info"] = self._deepseek_ocr.get_info()
+        return info
 
 
 class PDFProcessor:

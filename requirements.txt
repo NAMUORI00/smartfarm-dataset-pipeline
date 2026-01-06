@@ -23,5 +23,10 @@ paddlepaddle>=2.5.0      # PaddleOCR 기반 (Python 3.12 호환)
 paddleocr>=2.7.0         # 최고 성능 OCR
 # pytesseract>=0.3.10    # 폴백: 시스템에 tesseract-ocr 설치 필요
 
+# DeepSeek-OCR (선택적 - GPU 권장)
+# transformers>=4.45.0   # DeepSeek-OCR 지원
+# vllm>=0.8.5            # DeepSeek-OCR 추론 엔진
+# flash-attn>=2.6.0      # 고속 어텐션 (선택)
+
 # 추가 문서 로더
 unstructured>=0.10.0

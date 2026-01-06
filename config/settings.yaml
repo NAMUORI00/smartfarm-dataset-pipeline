@@ -58,11 +58,22 @@ rag:
   
   # PDF/이미지 처리 설정 (EasyOCR/PaddleOCR 기반 - 고성능/경량)
   use_ocr_fallback: true   # 텍스트 추출 실패 시 OCR 사용
-  ocr_backend: "auto"      # auto(권장): EasyOCR > PaddleOCR > Tesseract 순
+  ocr_backend: "auto"      # auto(권장): DeepSeek > EasyOCR > PaddleOCR > Tesseract 순
   ocr_lang: "korean"       # OCR 언어 (korean, eng 등)
   ocr_dpi: 200             # OCR 이미지 해상도 (엣지 환경 고려)
   ocr_use_gpu: false       # 엣지 환경 기본 CPU 사용
   extract_tables: true     # PDF 테이블 추출 여부
+
+  # DeepSeek-OCR 설정 (GPU 권장, 8GB VRAM 기준)
+  deepseek_ocr:
+    enabled: false              # DeepSeek-OCR 활성화 여부 (pip install .[deepseek] 필요)
+    model_id: "deepseek-ai/DeepSeek-OCR"  # HuggingFace 모델 ID
+    model_size: "tiny"          # tiny(64tok), small(100tok), base(256tok), large(400tok)
+    quantize: "4bit"            # none, 8bit, 4bit (8GB VRAM은 4bit 권장)
+    max_batch_size: 4           # 배치 크기 (VRAM에 따라 조절)
+    compression_ratio: 10       # 압축 비율 (10x 권장, 97% 정확도)
+    use_vllm: true              # vLLM 백엔드 사용 (권장)
+    device: "cuda"              # cuda 또는 cpu
 
 domain:
   name: "smartfarm"

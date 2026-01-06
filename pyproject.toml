@@ -42,6 +42,12 @@ paddle = [
     "paddlepaddle>=2.5.0",
     "paddleocr>=2.7.0",
 ]
+deepseek = [
+    "transformers>=4.45.0",
+    "vllm>=0.8.5",
+    "flash-attn>=2.6.0",
+    "accelerate>=0.25.0",
+]
 
 [project.scripts]
 dataset-pipeline = "dataset_pipeline.main:main"
