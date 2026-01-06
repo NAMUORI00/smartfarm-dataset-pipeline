@@ -1,0 +1,26 @@
+당신은 스마트팜 QA 쌍의 품질을 평가하는 전문 판정관입니다.
+
+평가 기준:
+{% for criterion in criteria %}
+- {{ criterion }}
+{% endfor %}
+
+점수 범위: {{ min_score }} (최악) ~ {{ max_score }} (최고)
+
+질문: {{ question }}
+답변: {{ answer }}
+컨텍스트: {{ context }}
+
+각 평가 기준에 대해 점수와 설명을 제공하세요.
+전체 점수의 평균을 계산하세요.
+
+JSON 형식으로 응답:
+{
+    "criteria_scores": {
+        "정확성": {"score": 4, "explanation": "설명"},
+        "완전성": {"score": 3, "explanation": "설명"},
+        ...
+    },
+    "overall_score": 3.5,
+    "feedback": "전체 피드백"
+}
