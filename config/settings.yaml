@@ -7,7 +7,7 @@ llm:
     # OpenAI-compatible API 규격
     # NOTE: base_url은 환경변수 OPENAI_BASE_URL로 오버라이드됨 (.env 참조)
     base_url: "${OPENAI_BASE_URL}"
-    model: "gemini-2.5-flash"  # 빠른 생성용
+    model: "gemini-3-flash-preview"  # 빠른 생성용
     api_key: "${API_KEY}"
     temperature: 0.7
     max_tokens: 2048

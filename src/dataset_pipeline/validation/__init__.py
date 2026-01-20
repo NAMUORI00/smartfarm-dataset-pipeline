@@ -19,10 +19,13 @@ from .diversity_metrics import DiversityValidator
 from .groundedness import GroundednessValidator
 from .judge_consistency import JudgeConsistencyValidator
 from .validator import DatasetValidator
+from .ragas_eval import run_ragas_eval, run_ragas_compare
 
 __all__ = [
     "DiversityValidator",
     "GroundednessValidator",
     "JudgeConsistencyValidator",
     "DatasetValidator",
+    "run_ragas_eval",
+    "run_ragas_compare",
 ]

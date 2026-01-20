@@ -27,6 +27,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Optional
@@ -235,6 +236,10 @@ def mqm_score(
 @click.option("--output", "-o", required=True, help="출력 JSONL 파일 경로")
 @click.option("--num-questions", "-n", type=int, default=220, help="생성할 QA 쌍 수 (기본: 220)")
 @click.option("--model", default=None, help="LLM 모델명 (기본: 설정 파일의 generator)")
+@click.option("--lexical-threshold", type=float, default=None, help="질문-문맥 lexical overlap 임계값 (예: 0.2). 설정 시 초과 질문 제거")
+@click.option("--paraphrase", is_flag=True, help="질문 패러프레이즈 적용")
+@click.option("--paraphrase-temp", type=float, default=0.3, help="패러프레이즈 온도 (기본: 0.3)")
+@click.option("--multi-source", is_flag=True, help="동일 텍스트 문서 ID를 source_ids에 함께 포함")
 @click.option("--delay", type=float, default=0.5, help="요청 간 대기 시간 (초)")
 @click.option("--resume", is_flag=True, help="기존 출력 파일에서 이어서 진행")
 @click.pass_context
@@ -244,6 +249,10 @@ def generate_qa(
     output: str,
     num_questions: int,
     model: Optional[str],
+    lexical_threshold: Optional[float],
+    paraphrase: bool,
+    paraphrase_temp: float,
+    multi_source: bool,
     delay: float,
     resume: bool,
 ):
@@ -307,6 +316,9 @@ def generate_qa(
     }
     
     # 질문 생성 프롬프트
+    extra_rules = ""
+    if lexical_threshold is not None or paraphrase:
+        extra_rules = "\n- 원문 표현을 그대로 복사하지 말고 의미를 유지한 재구성 문장으로 질문 작성"
     q_prompt_template = """당신은 와사비 재배 전문가입니다. 주어진 문서를 바탕으로 교육적 가치가 높은 질문을 생성하세요.
 
 [문서]
@@ -320,6 +332,7 @@ def generate_qa(
 - 질문 유형: {complexity}
 - 카테고리: {category}
 - 한국어로 3개 질문 생성
+{extra_rules}
 
 JSON 배열로 출력:
 [{{"question": "질문", "answer_hint": "힌트"}}]"""
@@ -340,6 +353,36 @@ JSON 배열로 출력:
 
 답변:"""
     
+    def normalize_text(text: str) -> str:
+        import re
+        text = (text or "").lower()
+        text = re.sub(r"[^0-9A-Za-z가-힣\s]", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    def char_ngrams(text: str, n: int = 3) -> set:
+        text = normalize_text(text).replace(" ", "")
+        if len(text) < n:
+            return set()
+        return {text[i:i + n] for i in range(len(text) - n + 1)}
+
+    def jaccard(a: set, b: set) -> float:
+        if not a or not b:
+            return 0.0
+        inter = len(a & b)
+        union = len(a | b)
+        return inter / union if union else 0.0
+
+    # 동일 텍스트 문서 ID 매핑 (multi_source 옵션)
+    text_to_ids = {}
+    if multi_source:
+        text_to_ids = {}
+        for doc in corpus:
+            text_ko = doc.get("text_ko") or doc.get("text", "")
+            key = normalize_text(text_ko)
+            if key:
+                text_to_ids.setdefault(key, []).append(doc.get("id", "unknown"))
+
     qa_pairs = []
     qa_id = len(existing_ids)
     random.shuffle(corpus)
@@ -365,6 +408,7 @@ JSON 배열로 출력:
                 existing="\n".join(existing_questions[-10:]) if existing_questions else "(없음)",
                 complexity=complexities[complexity_key],
                 category=category,
+                extra_rules=extra_rules,
             )
             
             try:
@@ -384,6 +428,8 @@ JSON 배열로 출력:
                     click.echo(f"\n질문 생성 오류: {e}", err=True)
                 continue
             
+            context_ngrams = char_ngrams(text_ko[:2000]) if lexical_threshold is not None else set()
+
             for q_data in questions:
                 if len(qa_pairs) + len(existing_ids) >= num_questions:
                     break
@@ -391,6 +437,40 @@ JSON 배열로 출력:
                 question = q_data.get("question", "").strip()
                 if not question or question in existing_questions:
                     continue
+
+                original_question = question
+                paraphrased = False
+                if paraphrase:
+                    paraphrase_prompt = (
+                        "다음 질문을 의미를 유지하면서 다른 표현으로 바꿔주세요. "
+                        "전문 용어와 핵심 키워드는 유지하고, 질문만 출력하세요.\n\n"
+                        f"[질문]\n{question}\n"
+                    )
+                    try:
+                        p_resp = client.chat.completions.create(
+                            model=actual_model,
+                            messages=[{"role": "user", "content": paraphrase_prompt}],
+                            temperature=paraphrase_temp,
+                            max_tokens=200,
+                        )
+                        p_text = p_resp.choices[0].message.content.strip()
+                        if p_text:
+                            question = p_text
+                            paraphrased = True
+                    except Exception as e:
+                        if verbose:
+                            click.echo(f"\n패러프레이즈 오류: {e}", err=True)
+
+                if question in existing_questions:
+                    continue
+
+                lexical_overlap = None
+                if lexical_threshold is not None and context_ngrams:
+                    q_ngrams = char_ngrams(question)
+                    if q_ngrams:
+                        lexical_overlap = jaccard(q_ngrams, context_ngrams)
+                        if lexical_overlap >= lexical_threshold:
+                            continue
                 
                 # 답변 생성
                 a_prompt = a_prompt_template.format(question=question, context=text_ko[:3000])
@@ -411,6 +491,12 @@ JSON 배열로 출력:
                 if not answer or "문서에 해당 정보가 없습니다" in answer:
                     continue
                 
+                source_ids = [doc_id]
+                if multi_source:
+                    key = normalize_text(text_ko)
+                    if key in text_to_ids:
+                        source_ids = sorted(set(text_to_ids[key]))
+
                 qa_pair = {
                     "id": f"wasabi_qa_{qa_id:04d}",
                     "question": question,
@@ -418,10 +504,15 @@ JSON 배열로 출력:
                     "context": text_ko[:1000],
                     "category": category,
                     "complexity": complexity_key,
-                    "source_ids": [doc_id],
+                    "source_ids": source_ids,
                     "metadata": {
                         "answer_hint": q_data.get("answer_hint", ""),
                         "model": actual_model,
+                        "paraphrased": paraphrased,
+                        "original_question": original_question if paraphrased else "",
+                        "lexical_overlap": lexical_overlap if lexical_overlap is not None else "",
+                        "lexical_threshold": lexical_threshold if lexical_threshold is not None else "",
+                        "source_id_equivalence_count": len(source_ids),
                     },
                 }
                 
@@ -539,6 +630,159 @@ def postedit(
     )
     
     return cmd_postedit(args)
+
+
+# =============================================================================
+# ragas-eval 명령
+# =============================================================================
+
+@cli.command("ragas-eval")
+@click.option("--input", "-i", "input_file", required=True, help="QA JSONL 입력 파일 경로")
+@click.option("--output", "-o", required=True, help="RAGAS 결과 JSON 출력 경로")
+@click.option("--limit", type=int, default=None, help="평가 샘플 수 제한")
+@click.option("--llm-role", default="judge", help="LLM 역할 (generator|judge)")
+@click.option("--llm-model", default=None, help="평가용 LLM 모델명 오버라이드")
+@click.option("--llm-base-url", default=None, help="평가용 LLM base URL 오버라이드")
+@click.option("--llm-api-key", default=None, help="평가용 LLM API 키 오버라이드")
+@click.option("--emb-model", default=None, help="임베딩 모델명 (로컬 HuggingFace)")
+@click.option("--emb-device", default=None, help="임베딩 디바이스 (cuda|cpu)")
+@click.option("--metric", "metrics", multiple=True, help="RAGAS metric (복수 지정 가능)")
+@click.option("--batch-size", type=int, default=None, help="RAGAS 배치 크기")
+@click.option("--save-per-sample", is_flag=True, help="샘플별 점수 저장")
+@click.option("--no-progress", is_flag=True, help="진행률 표시 비활성화")
+@click.pass_context
+def ragas_eval(
+    ctx: click.Context,
+    input_file: str,
+    output: str,
+    limit: Optional[int],
+    llm_role: str,
+    llm_model: Optional[str],
+    llm_base_url: Optional[str],
+    llm_api_key: Optional[str],
+    emb_model: Optional[str],
+    emb_device: Optional[str],
+    metrics: tuple,
+    batch_size: Optional[int],
+    save_per_sample: bool,
+    no_progress: bool,
+):
+    """QA 데이터셋에 대한 RAGAS 평가 실행."""
+    from .validation.ragas_eval import load_qa_jsonl, run_ragas_eval
+
+    config: ConfigManager = ctx.obj["config"]
+    items = load_qa_jsonl(Path(input_file), limit=limit)
+    summary, per_sample = run_ragas_eval(
+        items,
+        config=config,
+        llm_role=llm_role,
+        llm_model=llm_model,
+        llm_base_url=llm_base_url,
+        llm_api_key=llm_api_key,
+        emb_model=emb_model,
+        emb_device=emb_device,
+        metric_names=metrics or None,
+        batch_size=batch_size,
+        show_progress=not no_progress,
+    )
+
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "input": str(input_file),
+        "num_samples": len(items),
+        "metrics": list(metrics) if metrics else None,
+        "summary": summary,
+    }
+    if save_per_sample:
+        payload["per_sample"] = per_sample
+
+    output_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    click.echo(f"RAGAS 결과 저장: {output_path}")
+
+
+# =============================================================================
+# ragas-compare 명령
+# =============================================================================
+
+@cli.command("ragas-compare")
+@click.option("--baseline", required=True, help="원본 QA JSONL 경로")
+@click.option("--improved", required=True, help="개선본 QA JSONL 경로")
+@click.option("--output", "-o", required=True, help="비교 결과 JSON 출력 경로")
+@click.option("--limit", type=int, default=None, help="평가 샘플 수 제한")
+@click.option("--llm-role", default="judge", help="LLM 역할 (generator|judge)")
+@click.option("--llm-model", default=None, help="평가용 LLM 모델명 오버라이드")
+@click.option("--llm-base-url", default=None, help="평가용 LLM base URL 오버라이드")
+@click.option("--llm-api-key", default=None, help="평가용 LLM API 키 오버라이드")
+@click.option("--emb-model", default=None, help="임베딩 모델명 (로컬 HuggingFace)")
+@click.option("--emb-device", default=None, help="임베딩 디바이스 (cuda|cpu)")
+@click.option("--metric", "metrics", multiple=True, help="RAGAS metric (복수 지정 가능)")
+@click.option("--batch-size", type=int, default=None, help="RAGAS 배치 크기")
+@click.option("--no-progress", is_flag=True, help="진행률 표시 비활성화")
+@click.pass_context
+def ragas_compare(
+    ctx: click.Context,
+    baseline: str,
+    improved: str,
+    output: str,
+    limit: Optional[int],
+    llm_role: str,
+    llm_model: Optional[str],
+    llm_base_url: Optional[str],
+    llm_api_key: Optional[str],
+    emb_model: Optional[str],
+    emb_device: Optional[str],
+    metrics: tuple,
+    batch_size: Optional[int],
+    no_progress: bool,
+):
+    """원본/개선본 QA 데이터셋의 RAGAS 결과 비교."""
+    from .validation.ragas_eval import load_qa_jsonl, run_ragas_compare
+
+    config: ConfigManager = ctx.obj["config"]
+    baseline_items = load_qa_jsonl(Path(baseline))
+    improved_items = load_qa_jsonl(Path(improved))
+
+    baseline_map = {item.get("id"): item for item in baseline_items}
+    improved_map = {item.get("id"): item for item in improved_items}
+    common_ids = [item.get("id") for item in baseline_items if item.get("id") in improved_map]
+    if limit:
+        common_ids = common_ids[:limit]
+
+    aligned_baseline = [baseline_map[i] for i in common_ids if i in baseline_map]
+    aligned_improved = [improved_map[i] for i in common_ids if i in improved_map]
+
+    result = run_ragas_compare(
+        aligned_baseline,
+        aligned_improved,
+        config=config,
+        llm_role=llm_role,
+        llm_model=llm_model,
+        llm_base_url=llm_base_url,
+        llm_api_key=llm_api_key,
+        emb_model=emb_model,
+        emb_device=emb_device,
+        metric_names=metrics or None,
+        batch_size=batch_size,
+        show_progress=not no_progress,
+    )
+    result.update(
+        {
+            "baseline": {"path": baseline, "num_samples": len(aligned_baseline), **result["baseline"]},
+            "improved": {"path": improved, "num_samples": len(aligned_improved), **result["improved"]},
+        }
+    )
+
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    click.echo(f"RAGAS 비교 결과 저장: {output_path}")
 
 
 # =============================================================================
