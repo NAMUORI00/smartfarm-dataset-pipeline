@@ -21,7 +21,7 @@ services:
   # ============================================
   config:
     build: .
-    image: dataset-pipeline:latest
+    image: smartfarm-ingest:latest
     environment:
       - API_KEY=${API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
@@ -36,7 +36,7 @@ services:
   # ============================================
   crawler:
     build: .
-    image: dataset-pipeline:latest
+    image: smartfarm-ingest:latest
     volumes:
       - ./output:/app/output
     command: [
@@ -51,7 +51,7 @@ services:
   # ============================================
   translator:
     build: .
-    image: dataset-pipeline:latest
+    image: smartfarm-ingest:latest
     environment:
       - API_KEY=${API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
@@ -70,7 +70,7 @@ services:
   # ============================================
   qa-generator:
     build: .
-    image: dataset-pipeline:latest
+    image: smartfarm-ingest:latest
     environment:
       - API_KEY=${API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
@@ -91,7 +91,7 @@ services:
   # ============================================
   validator:
     build: .
-    image: dataset-pipeline:latest
+    image: smartfarm-ingest:latest
     volumes:
       - ./output:/app/output
     entrypoint: ["python"]
@@ -106,7 +106,7 @@ services:
   # ============================================
   test:
     build: .
-    image: dataset-pipeline:latest
+    image: smartfarm-ingest:latest
     volumes:
       - ./tests:/app/tests:ro
       - ./src:/app/src:ro
@@ -119,7 +119,7 @@ services:
   # ============================================
   shell:
     build: .
-    image: dataset-pipeline:latest
+    image: smartfarm-ingest:latest
     environment:
       - API_KEY=${API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
@@ -139,7 +139,7 @@ services:
   # ============================================
   mqm-scorer:
     build: .
-    image: dataset-pipeline:latest
+    image: smartfarm-ingest:latest
     environment:
       - API_KEY=${API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
@@ -157,7 +157,7 @@ services:
   # ============================================
   cgiar-exporter:
     build: .
-    image: dataset-pipeline:latest
+    image: smartfarm-ingest:latest
     environment:
       - HF_TOKEN=${HF_TOKEN:-}
     volumes:

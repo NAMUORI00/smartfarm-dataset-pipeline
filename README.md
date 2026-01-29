@@ -40,7 +40,7 @@
 ### 1. 설치
 
 ```bash
-cd dataset-pipeline
+cd smartfarm-ingest
 pip install -r requirements.txt
 pip install -e .  # 개발 모드 설치
 ```
@@ -276,13 +276,13 @@ export HF_TOKEN="your-hf-token"  # CGIAR 추출 시 필요
 
 ```bash
 # CLI 직접 실행
-docker run --rm -e API_KEY=$API_KEY dataset-pipeline:latest config
+docker run --rm -e API_KEY=$API_KEY smartfarm-ingest:latest config
 
 # 볼륨 마운트와 함께
 docker run --rm \
   -e API_KEY=$API_KEY \
   -v $(pwd)/output:/app/output \
-  dataset-pipeline:latest generate-qa \
+  smartfarm-ingest:latest generate-qa \
   --input /app/output/wasabi_en_ko.jsonl \
   --output /app/output/wasabi_qa.jsonl
 ```
@@ -350,7 +350,7 @@ pytest tests/ -v
 ## 프로젝트 구조
 
 ```
-dataset-pipeline/
+smartfarm-ingest/
 ├── Dockerfile                # 통합 Docker 이미지
 ├── docker-compose.yml        # 프로파일 기반 Docker Compose
 ├── requirements.txt          # Python 의존성 (전체)

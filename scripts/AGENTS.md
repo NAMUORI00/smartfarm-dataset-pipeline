@@ -14,13 +14,20 @@ Standalone utility scripts for dataset processing, testing, and administration.
 | `merge_translations.py` | Merge parallel translation results | `python merge_translations.py --inputs FILE1 FILE2 FILE3 FILE4 --output FILE` |
 | `generate_wasabi_qa.py` | Standalone QA generation for Wasabi documents | `python generate_wasabi_qa.py --input FILE --output FILE` |
 | `test_config.py` | Configuration validation and testing | `python test_config.py` |
+| `indexing/build_lightrag_working_dir.py` | Build LightRAG HKU `working_dir` (offline, LLM required) | `python scripts/indexing/build_lightrag_working_dir.py --input-jsonl FILE --working-dir DIR` |
+| `indexing/export_lightrag_edge_index.py` | Export edge-friendly LightRAG artifacts | `python scripts/indexing/export_lightrag_edge_index.py --working-dir DIR --output-dir DIR` |
+| `indexing/build_index_offline.py` | Build dense/sparse indices (offline, no server) | `python scripts/indexing/build_index_offline.py --corpus FILE` |
+| `ingest/ingest_jsonl_corpus.py` | Bulk ingest corpus via RAG API `/ingest` | `python scripts/ingest/ingest_jsonl_corpus.py --input FILE --host URL` |
+| `ingest/load_dataset.py` | Bulk load pipeline JSONL via RAG API `/ingest` | `python scripts/ingest/load_dataset.py --file FILE --host URL` |
+| `ingest/ingest_wasabi_kb.py` | Bulk ingest Wasabi KB folder via RAG API `/ingest` | `python scripts/ingest/ingest_wasabi_kb.py --input DIR --host URL` |
+| `ingest/ingest_smartfarm_kb.py` | Ingest built-in SmartFarm KB via RAG API `/ingest` | `python scripts/ingest/ingest_smartfarm_kb.py --host URL` |
 
 ## Running Scripts
 
-All scripts must be run from the `dataset-pipeline/` root:
+All scripts must be run from the `smartfarm-ingest/` root:
 
 ```bash
-cd dataset-pipeline
+cd smartfarm-ingest
 
 # Test configuration
 python scripts/test_config.py
@@ -45,11 +52,23 @@ python scripts/batch_translate.py \
 - `merge_translations.py` - Combine parallel results
 - `generate_wasabi_qa.py` - QA dataset generation
 
+### Indexing (Offline)
+- `indexing/build_lightrag_working_dir.py` - Build LightRAG HKU working_dir (LLM required)
+- `indexing/export_lightrag_edge_index.py` - Export edge-friendly artifacts
+- `indexing/build_index_offline.py` - Build dense/sparse indices + graph
+
 ### Testing & Validation
 - `test_config.py` - Validate configuration loading and merging
 
 ### Administration
 Scripts in this folder can be executed directly without CLI framework overhead.
+
+## Dependencies / Workspace Layout
+
+- These scripts assume `smartfarm-ingest` is used as a **workspace submodule** alongside `smartfarm-search`.
+- If your folder layout differs, set one of:
+  - `SMARTFARM_WORKSPACE_ROOT`
+  - `SMARTFARM_SEARCH_ROOT`
 
 ## For AI Agents
 
