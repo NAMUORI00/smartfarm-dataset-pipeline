@@ -14,8 +14,7 @@ Standalone utility scripts for dataset processing, testing, and administration.
 | `merge_translations.py` | Merge parallel translation results | `python merge_translations.py --inputs FILE1 FILE2 FILE3 FILE4 --output FILE` |
 | `generate_wasabi_qa.py` | Standalone QA generation for Wasabi documents | `python generate_wasabi_qa.py --input FILE --output FILE` |
 | `test_config.py` | Configuration validation and testing | `python test_config.py` |
-| `indexing/build_lightrag_working_dir.py` | Build LightRAG HKU `working_dir` (offline, LLM required) | `python scripts/indexing/build_lightrag_working_dir.py --input-jsonl FILE --working-dir DIR` |
-| `indexing/export_lightrag_edge_index.py` | Export edge-friendly LightRAG artifacts | `python scripts/indexing/export_lightrag_edge_index.py --working-dir DIR --output-dir DIR` |
+| `indexing/build_trigraph_index_v2.py` | Build Dense+Sparse+Tri-Graph indices (LLM-free) | `python scripts/indexing/build_trigraph_index_v2.py --input-jsonl FILE --lang ko --embed-model-id minilm` |
 | `indexing/build_index_offline.py` | Build dense/sparse indices (offline, no server) | `python scripts/indexing/build_index_offline.py --corpus FILE` |
 | `ingest/ingest_jsonl_corpus.py` | Bulk ingest corpus via RAG API `/ingest` | `python scripts/ingest/ingest_jsonl_corpus.py --input FILE --host URL` |
 | `ingest/load_dataset.py` | Bulk load pipeline JSONL via RAG API `/ingest` | `python scripts/ingest/load_dataset.py --file FILE --host URL` |
@@ -53,8 +52,7 @@ python scripts/batch_translate.py \
 - `generate_wasabi_qa.py` - QA dataset generation
 
 ### Indexing (Offline)
-- `indexing/build_lightrag_working_dir.py` - Build LightRAG HKU working_dir (LLM required)
-- `indexing/export_lightrag_edge_index.py` - Export edge-friendly artifacts
+- `indexing/build_trigraph_index_v2.py` - Build Dense+Sparse+Tri-Graph indices (LLM-free)
 - `indexing/build_index_offline.py` - Build dense/sparse indices + graph
 
 ### Testing & Validation
