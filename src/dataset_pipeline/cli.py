@@ -590,6 +590,91 @@ def export_cgiar(
 
 
 # =============================================================================
+# compile-base-kb 명령
+# =============================================================================
+
+@cli.command("compile-base-kb")
+@click.option("--input", "-i", "input_file", required=True, type=click.Path(exists=True), help="입력 코퍼스 JSONL 경로")
+@click.option(
+    "--output-sqlite",
+    "-o",
+    "output_sqlite",
+    required=True,
+    type=click.Path(),
+    help="출력 base.sqlite 경로",
+)
+@click.option("--bundle-out", default=None, type=click.Path(), help="선택: base_bundle.tar.gz 출력 경로")
+@click.option("--limit-docs", type=int, default=None, help="처리할 최대 문서 수")
+@click.option("--limit-chunks", type=int, default=None, help="처리할 최대 청크 수")
+@click.option("--chunk-token-size", type=int, default=1200, help="청크 토큰 크기(기본: 1200; LightRAG 기본값)")
+@click.option("--chunk-token-overlap", type=int, default=100, help="청크 토큰 오버랩(기본: 100; LightRAG 기본값)")
+@click.option(
+    "--tokenizer-model",
+    default="gpt-4o-mini",
+    help="tiktoken 모델명(기본: gpt-4o-mini; LightRAG 기본값). 미지원 시 cl100k_base로 폴백.",
+)
+@click.option("--entity-extract-max-gleaning", type=int, default=1, help="추출 보강(gleaning) 반복 수(기본: 1; LightRAG 기본값)")
+@click.option("--max-tokens", type=int, default=700, help="SOTA LLM 출력 max_tokens (기본: 700)")
+@click.option("--schema-version", default="kb-update-v1", help="extractions.schema_version (기본: kb-update-v1)")
+@click.pass_context
+def compile_base_kb(
+    ctx: click.Context,
+    input_file: str,
+    output_sqlite: str,
+    bundle_out: Optional[str],
+    limit_docs: Optional[int],
+    limit_chunks: Optional[int],
+    chunk_token_size: int,
+    chunk_token_overlap: int,
+    tokenizer_model: str,
+    entity_extract_max_gleaning: int,
+    max_tokens: int,
+    schema_version: str,
+):
+    """
+    공개 문서를 SOTA LLM로 구조화 추출하여 `base.sqlite`(SoT)를 생성합니다.
+
+    - 입력은 JSONL 코퍼스이며, 각 row는 최소 {id, text|text_ko|text_en, metadata} 형태를 권장합니다.
+    - 생성된 `base.sqlite`는 온프레미스 런타임에서 읽기 전용 Base KB로 사용됩니다.
+    """
+    config: ConfigManager = ctx.obj["config"]
+
+    from .base_kb_compiler import compile_base_kb as _compile
+    from .llm_connector import LLMConnector
+
+    llm = LLMConnector.from_config(config)
+    stats = _compile(
+        input_jsonl=Path(input_file),
+        output_sqlite=Path(output_sqlite),
+        llm=llm,
+        llm_role="judge",
+        system_prompt="Return JSON only. Do not include any extra text.",
+        chunk_token_size=int(chunk_token_size),
+        chunk_token_overlap=int(chunk_token_overlap),
+        tokenizer_model=str(tokenizer_model),
+        entity_extract_max_gleaning=int(entity_extract_max_gleaning),
+        schema_version=schema_version,
+        max_tokens=int(max_tokens),
+        limit_docs=limit_docs,
+        limit_chunks=limit_chunks,
+        bundle_out=Path(bundle_out) if bundle_out else None,
+    )
+
+    click.echo("=== Base KB compile complete ===")
+    click.echo(f"input: {stats.input_path}")
+    click.echo(f"base.sqlite: {stats.output_sqlite}")
+    click.echo(f"manifest: {stats.manifest_path}")
+    if stats.bundle_path:
+        click.echo(f"bundle: {stats.bundle_path}")
+    click.echo(
+        "counts:"
+        f" docs={stats.docs}, chunks={stats.chunks},"
+        f" extractions_ok={stats.extractions_ok}, extractions_error={stats.extractions_error},"
+        f" entities={stats.entities}, relations={stats.relations}"
+    )
+
+
+# =============================================================================
 # postedit 명령
 # =============================================================================
 

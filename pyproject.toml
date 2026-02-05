@@ -58,3 +58,6 @@ corpus-cli = "dataset_pipeline.corpus_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-s"

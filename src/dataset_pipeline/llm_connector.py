@@ -181,13 +181,19 @@ class LLMConnector:
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
-        
-        response = client.chat.completions.create(
-            model=config.model,
-            messages=messages,
-            temperature=kwargs.get("temperature", config.temperature),
-            max_tokens=kwargs.get("max_tokens", config.max_tokens),
-        )
+
+        create_kwargs: Dict[str, Any] = {
+            "model": config.model,
+            "messages": messages,
+            "temperature": kwargs.get("temperature", config.temperature),
+            "max_tokens": kwargs.get("max_tokens", config.max_tokens),
+        }
+        # Optional: OpenAI-compatible structured output / JSON mode.
+        # Some providers may reject this; callers should fall back gracefully.
+        if "response_format" in kwargs and kwargs["response_format"] is not None:
+            create_kwargs["response_format"] = kwargs["response_format"]
+
+        response = client.chat.completions.create(**create_kwargs)
         
         return response.choices[0].message.content
     
